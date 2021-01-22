@@ -1,7 +1,7 @@
 # -*- coding:utf-8 -*-
 from tensorflow.contrib import slim
 import tensorflow as tf
-from xnncloud_classification.nets.resnet import resnet_utils
+from classification.nets.resnet import resnet_utils
 
 
 @slim.add_arg_scope
