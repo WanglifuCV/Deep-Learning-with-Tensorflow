@@ -6,7 +6,7 @@ import tensorflow as tf
 from tensorflow.contrib import slim
 
 
-class Block(collections.namedtuple('Block', ['scope', 'unit_fn', 'stride'])):
+class Block(collections.namedtuple('Block', ['scope', 'unit_fn', 'args'])):
     """A named tuple describing a ResNet block.
         Its parts are:
         scope: The scope of the `Block`.
@@ -32,9 +32,7 @@ def subsample(inputs, factor, scope=None):
     if factor == 1:
         output = inputs
     else:
-        output = slim.max_pool2d(
-            inputs, [1, 1], factor, scope
-        )
+        output = slim.max_pool2d(inputs, [1, 1], stride=factor, scope=scope)
     return output
 
 
@@ -77,3 +75,61 @@ def conv2d_same(
             inputs, num_outputs=depth_out, kernel_size=kernel_size, stride=stride, rate=rate,
             padding='VALID', scope=scope
         )
+
+
+class NoOpScope(object):
+    """
+    No Op context manager.
+    """
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+
+def stack_blocks_dense(
+        net,
+        blocks,
+        output_stride=None,
+        store_non_strided_activations=False,
+        outputs_collections=None
+):
+    current_stride = 1
+    rate = 1
+
+    for block in blocks:
+        with tf.variable_scope(block.scope, 'block', [net]) as sc:
+            block_stride = 1
+            for i, unit in enumerate(block.args):
+
+                if store_non_strided_activations and i == len(block.args) - 1:
+                    block_stride = unit.get('stride', 1)
+                    unit = dict(unit, stride=1)
+
+                with tf.variable_scope('unit_{}'.format(i + 1), values=[net]):
+                    if output_stride is not None and current_stride == output_stride:
+                        net = block.unit_fn(net, rate=1, **dict(unit, stride=1))
+                        rate *= unit.get('rate', 1)
+                    else:
+                        net = block.unit_fn(net, rate=1, **unit)
+                        current_stride *= unit.get('stride', 1)
+
+                        if output_stride is not None and current_stride > output_stride:
+                            raise ValueError('The target output_stride cannot be reached.')
+
+            net = slim.utils.collect_named_outputs(outputs_collections, sc.name, net)
+
+            if output_stride is not None and current_stride == output_stride:
+                rate *= block_stride
+
+            else:
+                net = subsample(net, block_stride)
+                current_stride *= block_stride
+                if output_stride is not None and current_stride > output_stride:
+                    raise ValueError('The target output_stride cannot be reached.')
+
+    if output_stride is not None and current_stride != output_stride:
+        raise ValueError('The target output_stride cannot be reached.')
+
+    return net
