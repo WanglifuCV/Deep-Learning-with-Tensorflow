@@ -4,6 +4,8 @@ from operator import mod
 import tensorflow as tf
 from classification.nets.resnet import resnet_v1
 from classification.data.generator1 import DataLoader
+import os.path as osp
+
 
 class ResNetV1Model(object):
 
@@ -42,21 +44,20 @@ class ResNetV1Model(object):
 
         return logits, end_points
 
-
     def train(
         self,
         data_root_folder,
         checkpoint_folder_dir,
         batch_size=64,
         epoch_num=90,
-        init_learning_rate=1e-3,
+        init_learning_rate=1e-4,
         pretrain_model_dir=None
     ):
 
         # 获取数据
         loader = DataLoader(data_root_folder, class_num=self.num_classes)
 
-        images_batch, labels_batch = loader.get_batch(batch_size=batch_size)
+        images_batch, onehot_labels_batch = loader.get_batch(batch_size=batch_size)
         # 模型搭建
         logits, _ = self.build_model(
             inputs=images_batch,
@@ -66,7 +67,7 @@ class ResNetV1Model(object):
         global_step = tf.train.get_or_create_global_step()
 
         # 计算loss
-        tf.losses.softmax_cross_entropy(onehot_labels=labels_batch, logits=logits)
+        tf.losses.softmax_cross_entropy(onehot_labels=onehot_labels_batch, logits=logits)
         total_loss = tf.losses.get_total_loss()
 
         learning_rate = tf.train.exponential_decay(
@@ -82,15 +83,19 @@ class ResNetV1Model(object):
         with tf.control_dependencies(update_ops):
             train_op = optimizer.minimize(total_loss, global_step)
 
-        # 计算accuracy
-        predictions = tf.argmax(logits, axis=1)
-        top_1_accuracy = tf.metrics.accuracy(tf.argmax(labels_batch, axis=1), predictions, name='acc')
+        top_1_accuracy, top_5_accuracy = self.build_accuracy_base(logits=logits, onehot_labels_batch=onehot_labels_batch)
 
-        tf.summary.scalar('top_1_acc', top_1_accuracy[1])
+        tf.summary.scalar('top_1_acc', top_1_accuracy)
+        tf.summary.scalar('top_5_acc', top_5_accuracy)
         tf.summary.scalar('total_loss', total_loss)
 
-        merged = tf.summary.merge_all()
+        merged_summary = tf.summary.merge_all()
+
+        saver = tf.train.Saver()
+
         with tf.Session() as sess:
+
+            train_summary_writer = tf.summary.FileWriter(osp.join(checkpoint_folder_dir, 'log'), sess.graph)
             init = tf.global_variables_initializer()
 
             sess.run(init)
@@ -101,14 +106,24 @@ class ResNetV1Model(object):
             try:
                 for epoch in range(epoch_num * 1000):
                     if coord.should_stop():
-                        # raise RuntimeError('Data load error!')
-                        print('Done!')
+                        raise RuntimeError('Data load error!')
+                        # print('Done!')
                         break
                     print('Step {}'.format(epoch))
-                    [loss, _, images, labels] = sess.run([total_loss, train_op, images_batch, labels_batch])
+                    [loss, _, train_summary, step, top_1_acc, top_5_acc] = sess.run([
+                        total_loss, train_op, merged_summary, global_step,
+                        top_1_accuracy, top_5_accuracy
+                    ])
 
                     print('Loss: {}'.format(loss))
-                    # print('Accuracy: {}'.format(accuracy))
+                    print('Top 1 Accuracy: {}'.format(top_1_acc))
+                    print('Top 5 Accuracy: {}'.format(top_5_acc))
+
+                    train_summary_writer.add_summary(train_summary, step)
+
+                    if epoch % 1000 == 0:
+                        saver.save(sess, osp.join(checkpoint_folder_dir, 'resnet50'), global_step=step)
+
 
             except tf.errors.OutOfRangeError:
                 print('Epoch {} finished.'.format(epoch))
@@ -116,3 +131,16 @@ class ResNetV1Model(object):
             finally:
                 coord.request_stop()
             coord.join(threads)
+
+    def build_accuracy_base(self, logits, onehot_labels_batch):
+        # 计算accuracy
+        labels_batch = tf.cast(tf.argmax(onehot_labels_batch, axis=1), tf.int32)
+        predictions = tf.cast(tf.argmax(logits, axis=1), tf.int32)
+        correct_predictions = tf.equal(predictions, labels_batch)
+        # top_1_accuracy = tf.metrics.accuracy(tf.argmax(labels_batch, axis=1), predictions, name='acc')
+
+        top_1_accuracy = tf.reduce_mean(tf.cast(correct_predictions, tf.float32))
+        top_5_accuracy = tf.reduce_mean(tf.cast(tf.nn.in_top_k(predictions=logits, targets=labels_batch, k=5), tf.float32))
+
+        return top_1_accuracy, top_5_accuracy
+

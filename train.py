@@ -10,7 +10,7 @@ if __name__ == '__main__':
     )
 
     model.train(
-        data_root_folder='/home/wanglifu/data/datasets/ILSVRC2012/train',
-        checkpoint_folder_dir='/home/wanglifu/learning/Deep-Learning-with-TensorFlow/Deep-Learning-with-Tensorflow/classification/ckpt',
+        data_root_folder='/home/lifu/data/datasets/ILSVRC2012/train',
+        checkpoint_folder_dir='/home/lifu/learning/Deep-Learning-with-Tensorflow/classification/ckpt',
         init_learning_rate=1e-4
     )
